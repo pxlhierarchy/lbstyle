@@ -1,215 +1,142 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-import io
-import os
 from github import Github
-import base64
+import datetime
+import logging
 
-# Initialize GitHub client for persistence
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# GitHub configuration
+REPO_NAME = "pxlhierarchy/lbstyle"
 GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
-REPO_NAME = "pxlhierarchy/lbstyle"  # Replace with your GitHub repo (e.g., "johndoe/thrift-app")
-CSV_PATH = "inventory.csv"
 
-@st.cache_data
-def load_inventory():
-    if os.path.exists(CSV_PATH):
+# Pricing (CAD)
+PRICE_PER_LB = {"1": 7.50, "2": 5.50, "3": 4.00, "Bundle": 3.75}
+COST_PER_LB = 1.79  # Goodwill bins cost
+G_PER_LB = 453.592
+
+# Initialize session state
+if "inventory" not in st.session_state:
+    try:
+        logger.debug("Loading inventory.csv...")
+        df = pd.read_csv("inventory.csv") if pd.io.common.file_exists("inventory.csv") else pd.DataFrame(columns=[
+            "SKU", "Weight_g", "Weight_lb", "Description", "Tier", "Size", "Tags",
+            "Measurements", "Pic_Paths", "Price_CAD", "Cost_CAD", "Date_Added", "Sold"
+        ])
+        st.session_state.inventory = df
+        logger.debug("Inventory loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading inventory.csv: {e}")
+        st.error(f"Failed to load inventory: {e}")
+        st.session_state.inventory = pd.DataFrame(columns=[
+            "SKU", "Weight_g", "Weight_lb", "Description", "Tier", "Size", "Tags",
+            "Measurements", "Pic_Paths", "Price_CAD", "Cost_CAD", "Date_Added", "Sold"
+        ])
+
+# Function to save to GitHub
+def save_to_github(df):
+    try:
+        logger.debug(f"Connecting to GitHub with token ending: {GITHUB_TOKEN[-4:]}")
+        g = Github(GITHUB_TOKEN)
+        logger.debug(f"Accessing repo: {REPO_NAME}")
+        repo = g.get_repo(REPO_NAME)
+        logger.debug("Verifying branch: main")
+        repo.get_branch("main")  # Confirm branch exists
+        logger.debug("Checking for existing inventory.csv")
         try:
-            df = pd.read_csv(CSV_PATH)
-            # Ensure all expected columns exist
-            expected_columns = ['SKU', 'Weight_g', 'Weight_lb', 'Description', 'Tier', 'Size', 'Tags', 
-                               'Measurements', 'Pic_Paths', 'Price_CAD', 'Cost_CAD', 'Date_Added', 'Sold']
-            for col in expected_columns:
-                if col not in df.columns:
-                    df[col] = None if col != 'Sold' else False
-            return df
+            contents = repo.get_contents("inventory.csv", ref="main")
+            sha = contents.sha
+            logger.debug(f"Found inventory.csv, SHA: {sha}")
         except Exception as e:
-            st.error(f"Error loading inventory.csv: {e}")
-            return pd.DataFrame(columns=expected_columns)
-    return pd.DataFrame(columns=expected_columns)
+            logger.debug(f"No inventory.csv or error: {e}")
+            sha = None
+        csv_content = df.to_csv(index=False, encoding='utf-8')
+        logger.debug(f"Prepared CSV content, length: {len(csv_content)} bytes")
+        commit_message = f"Update inventory.csv {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        logger.debug(f"Committing: {commit_message}")
+        if sha:
+            repo.update_file("inventory.csv", commit_message, csv_content, sha, branch="main")
+            logger.debug("Updated existing inventory.csv")
+        else:
+            repo.create_file("inventory.csv", commit_message, csv_content, branch="main")
+            logger.debug("Created new inventory.csv")
+        logger.info("Successfully saved to inventory.csv on GitHub")
+        return True
+    except Exception as e:
+        logger.error(f"GitHub commit failed: {str(e)}")
+        st.error(f"Failed to save to GitHub: {str(e)}")
+        return False
 
-def save_inventory(df):
-    df.to_csv(CSV_PATH, index=False)
-    # Commit to GitHub
-    if GITHUB_TOKEN:
-        try:
-            g = Github(GITHUB_TOKEN)
-            repo = g.get_repo(REPO_NAME)
-            with open(CSV_PATH, "rb") as file:
-                content = file.read()
-            encoded_content = base64.b64encode(content).decode()
-            try:
-                # Update existing file
-                file = repo.get_contents(CSV_PATH)
-                repo.update_file(CSV_PATH, "Update inventory.csv", encoded_content, file.sha)
-            except:
-                # Create new file if it doesn't exist
-                repo.create_file(CSV_PATH, "Create inventory.csv", encoded_content)
-        except Exception as e:
-            st.error(f"Error committing to GitHub: {e}")
+# Streamlit UI
+st.title("BinRipper.fit Inventory Manager")
+option = st.sidebar.selectbox("Select Action", ["Add Item", "View Inventory", "Export Shopify CSV"])
 
-# Initialize session state for df
-if 'df' not in st.session_state:
-    st.session_state.df = load_inventory()
-
-def save_df(df):
-    st.session_state.df = df
-    save_inventory(df)
-
-def add_item(df, sku, weight_g, description, tier, size='', tags='', measurements='', pic_paths=''):
-    weight_lb = weight_g / 453.592  # Convert grams to pounds
-    # Calculate price based on tier (non-subscriber rates, CAD)
-    price_per_lb = {'1': 7.50, '2': 5.50, '3': 4.00, 'Bundle': 3.75}
-    price = round(weight_lb * price_per_lb[str(tier)], 2) if str(tier) in price_per_lb else 0.00
-    # Calculate cost at $1.79/lb CAD
-    cost = round(weight_lb * 1.79, 2)
-    date_added = datetime.now().strftime('%Y-%m-%d')
-    # Clean tags: remove spaces after commas
-    tags = ','.join(tag.strip() for tag in tags.split(',') if tag.strip()) if tags else ''
-    new_row = pd.DataFrame([{
-        'SKU': sku, 'Weight_g': weight_g, 'Weight_lb': weight_lb, 'Description': description, 'Tier': tier,
-        'Size': size, 'Tags': tags, 'Measurements': measurements, 'Pic_Paths': pic_paths,
-        'Price_CAD': price, 'Cost_CAD': cost, 'Date_Added': date_added, 'Sold': False
-    }])
-    df = pd.concat([df, new_row], ignore_index=True)
-    # Debug price and cost calculation
-    st.write(f"Debug: SKU={sku}, Weight={weight_g}g ({weight_lb:.2f}lb), Tier={tier}, Price=${price} CAD, Cost=${cost} CAD")
-    return df
-
-def mark_sold(df, sku):
-    df.loc[df['SKU'] == sku, 'Sold'] = True
-    return df
-
-def get_slow_movers(df, days=60):
-    df['Date_Added'] = pd.to_datetime(df['Date_Added'], errors='coerce')
-    cutoff = datetime.now() - timedelta(days=days)
-    slow_movers = df[(df['Sold'] == False) & (df['Date_Added'] <= cutoff)].copy()
-    slow_movers['Action'] = slow_movers['Tier'].apply(lambda t: 'Drop price to $2-3/lb non-sub or bundle with Tier 2/1' if t == 3 else 'Bundle with Tier 3 items')
-    return slow_movers[['SKU', 'Description', 'Tier', 'Size', 'Tags', 'Weight_g', 'Weight_lb', 'Price_CAD', 'Cost_CAD', 'Action']]
-
-def create_bundle(df, bundle_sku, item_skus, bundle_description):
-    item_skus = [s.strip() for s in item_skus.split(',')]
-    bundle_items = df[df['SKU'].isin(item_skus) & (df['Sold'] == False)]
-    if len(bundle_items) != len(item_skus):
-        st.error("Some items not found or already sold.")
-        return df
-    total_weight_g = bundle_items['Weight_g'].sum()
-    total_weight_lb = total_weight_g / 453.592
-    # Calculate bundle price at $3.75/lb and cost at $1.79/lb
-    price = round(total_weight_lb * 3.75, 2)
-    cost = round(total_weight_lb * 1.79, 2)
-    # Combine tags from items, add 'Bundle'
-    bundle_tags = ','.join(set(','.join(bundle_items['Tags'].dropna()).split(',') + ['Bundle']))
-    new_row = pd.DataFrame([{
-        'SKU': bundle_sku, 'Weight_g': total_weight_g, 'Weight_lb': total_weight_lb, 'Description': bundle_description,
-        'Tier': 'Bundle', 'Size': '', 'Tags': bundle_tags, 'Measurements': '',
-        'Pic_Paths': ','.join(bundle_items['Pic_Paths'].str.cat(sep=',').split(',')), 
-        'Price_CAD': price, 'Cost_CAD': cost, 'Date_Added': datetime.now().strftime('%Y-%m-%d'), 'Sold': False
-    }])
-    df = pd.concat([df, new_row], ignore_index=True)
-    df.loc[df['SKU'].isin(item_skus), 'Sold'] = True
-    return df
-
-def export_shopify_csv(df):
-    shopify_rows = []
-    for _, row in df.iterrows():
-        if row['Sold']: continue
-        tags = f"tier{row['Tier']}" if row['Tier'] != 'Bundle' else 'Bundle'
-        if row['Tags']:  # Append custom tags, no spaces
-            tags += f",{row['Tags']}"
-        main_row = {
-            'Handle': row['SKU'],
-            'Title': row['Description'],
-            'Body (HTML)': f"<p>Tier {row['Tier']}. Size: {row['Size'] or 'N/A'}. Measurements: {row['Measurements'] or 'N/A'}. All sales final.</p>",
-            'Vendor': 'Your Thrift Arbitrage',
-            'Product Category': 'Apparel & Accessories > Clothing',
-            'Tags': tags,
-            'Published': 'false',
-            'Option1 Name': 'Title',
-            'Option1 Value': 'Default Title',
-            'Variant SKU': row['SKU'],
-            'Variant Grams': round(row['Weight_g']) if pd.notna(row['Weight_g']) else '',
-            'Variant Inventory Tracker': 'shopify',
-            'Variant Inventory Qty': 1,
-            'Variant Inventory Policy': 'deny',
-            'Variant Fulfillment Service': 'manual',
-            'Variant Price': row['Price_CAD'],
-            'Cost per item': row['Cost_CAD'],
-            'Variant Requires Shipping': 'true',
-            'Variant Taxable': 'true',
-            'Status': 'draft'
-        }
-        shopify_rows.append(main_row)
-    shopify_df = pd.DataFrame(shopify_rows)
-    csv_buffer = io.StringIO()
-    shopify_df.to_csv(csv_buffer, index=False)
-    return csv_buffer.getvalue()
-
-st.title("Thrift Inventory Manager")
-
-# Sidebar for actions
-st.sidebar.title("Actions")
-action = st.sidebar.selectbox("Choose action:", ["View Inventory", "Add Item", "Mark Sold", "Slow Movers Report", "Create Bundle", "Export Shopify CSV"])
-
-if action == "View Inventory":
-    st.subheader("Current Inventory")
-    # Display all fields with wider columns
-    st.dataframe(st.session_state.df, use_container_width=True)
-    # Calculate and display totals for unsold items
-    unsold_df = st.session_state.df[st.session_state.df['Sold'] == False]
-    total_retail = unsold_df['Price_CAD'].sum() if not unsold_df.empty else 0.00
-    total_cost = unsold_df['Cost_CAD'].sum() if not unsold_df.empty else 0.00
-    st.write(f"**Total Retail Value (Unsold):** ${total_retail:.2f} CAD")
-    st.write(f"**Total Cost (Unsold):** ${total_cost:.2f} CAD")
-
-elif action == "Add Item":
-    st.subheader("Add New Item")
-    with st.form("add_item"):
+if option == "Add Item":
+    with st.form("add_item_form"):
         sku = st.text_input("SKU")
-        weight_g = st.number_input("Weight (grams)", min_value=10.0, step=1.0)
-        desc = st.text_area("Description")
-        tier = st.selectbox("Tier", [1, 2, 3])
-        size = st.text_input("Size (optional, e.g., M or 32x34)")
-        tags = st.text_input("Tags (optional, comma-separated, e.g., tshirt,casual)")
-        # Always show measurements input, but only use for Tier 3
-        meas = st.text_input("Measurements (optional, required for Tier 3)")
-        pics = st.text_input("Pic Paths (local paths for reference)")
+        weight_g = st.number_input("Weight (grams)", min_value=0.0, step=0.1)
+        description = st.text_input("Description")
+        tier = st.selectbox("Tier", ["1", "2", "3", "Bundle"])
+        size = st.selectbox("Size", ["XS", "S", "M", "L", "XL"])
+        tags = st.text_input("Tags (comma-separated)")
+        measurements = st.text_input("Measurements")
+        pic_paths = st.text_input("Picture Paths (comma-separated)")
         submitted = st.form_submit_button("Add Item")
-        if submitted and sku:
-            # Only pass measurements for Tier 3
-            measurements = meas if tier == 3 else ''
-            st.session_state.df = add_item(st.session_state.df, sku, weight_g, desc, tier, size, tags, measurements, pics)
-            save_df(st.session_state.df)
-            st.success(f"Item added! {weight_g}g ({weight_g/453.592:.2f}lb, ${st.session_state.df.iloc[-1]['Price_CAD']} CAD, Cost ${st.session_state.df.iloc[-1]['Cost_CAD']} CAD)")
+        
+        if submitted and sku and weight_g and description:
+            logger.debug(f"Adding item: SKU={sku}, Weight_g={weight_g}")
+            weight_lb = weight_g / G_PER_LB
+            price_cad = round(weight_lb * PRICE_PER_LB[tier], 2)
+            cost_cad = round(weight_lb * COST_PER_LB, 2)
+            cleaned_tags = ",".join(tag.strip() for tag in tags.split(",") if tag.strip())
+            new_item = {
+                "SKU": sku,
+                "Weight_g": weight_g,
+                "Weight_lb": round(weight_lb, 2),
+                "Description": description,
+                "Tier": tier,
+                "Size": size,
+                "Tags": f"tier{tier},{cleaned_tags}",
+                "Measurements": measurements,
+                "Pic_Paths": pic_paths,
+                "Price_CAD": price_cad,
+                "Cost_CAD": cost_cad,
+                "Date_Added": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Sold": False
+            }
+            st.session_state.inventory = pd.concat([st.session_state.inventory, pd.DataFrame([new_item])], ignore_index=True)
+            logger.debug("Item added to session state")
+            if save_to_github(st.session_state.inventory):
+                st.success("Item added and saved to GitHub!")
+                st.write(f"SKU={sku}, Weight={weight_g}g ({round(weight_lb, 2)}lb), Tier={tier}, Price=${price_cad} CAD, Cost=${cost_cad} CAD")
+            else:
+                st.error("Item added locally but failed to save to GitHub.")
 
-elif action == "Mark Sold":
-    st.subheader("Mark Item Sold")
-    sku = st.text_input("Enter SKU to mark sold")
-    if st.button("Mark Sold") and sku:
-        st.session_state.df = mark_sold(st.session_state.df, sku)
-        save_df(st.session_state.df)
-        st.success("Marked as sold!")
+elif option == "View Inventory":
+    st.write("Current Inventory:")
+    st.dataframe(st.session_state.inventory)
+    st.write(f"Total Retail Value: ${st.session_state.inventory['Price_CAD'].sum():.2f} CAD")
+    st.write(f"Total Cost: ${st.session_state.inventory['Cost_CAD'].sum():.2f} CAD")
 
-elif action == "Slow Movers Report":
-    st.subheader("Slow Movers (60+ Days Unsold)")
-    slow_df = get_slow_movers(st.session_state.df)
-    st.dataframe(slow_df, use_container_width=True)
-    csv = slow_df.to_csv(index=False)
-    st.download_button("Download Report CSV", csv, "slow_movers.csv", "text/csv")
-
-elif action == "Create Bundle":
-    st.subheader("Create Bundle")
-    with st.form("create_bundle"):
-        bundle_sku = st.text_input("Bundle SKU")
-        item_skus = st.text_input("Item SKUs (comma-separated)")
-        bundle_desc = st.text_area("Bundle Description")
-        submitted = st.form_submit_button("Create Bundle")
-        if submitted and bundle_sku and item_skus:
-            st.session_state.df = create_bundle(st.session_state.df, bundle_sku, item_skus, bundle_desc)
-            save_df(st.session_state.df)
-            st.success("Bundle created!")
-
-elif action == "Export Shopify CSV":
-    st.subheader("Shopify Export (Drafts)")
-    csv_data = export_shopify_csv(st.session_state.df)
-    st.download_button("Download Shopify CSV", csv_data, "shopify_import.csv", "text/csv")
+elif option == "Export Shopify CSV":
+    shopify_df = st.session_state.inventory.copy()
+    shopify_df["Handle"] = shopify_df["SKU"]
+    shopify_df["Title"] = shopify_df["Description"]
+    shopify_df["Body (HTML)"] = shopify_df.apply(
+        lambda row: f"<p>Tier {row['Tier']}. Size: {row['Size']}. Measurements: {row['Measurements']}. All sales final.</p>", axis=1)
+    shopify_df["Variant SKU"] = shopify_df["SKU"]
+    shopify_df["Variant Grams"] = shopify_df["Weight_g"]
+    shopify_df["Variant Price"] = shopify_df["Price_CAD"]
+    shopify_df["Cost per item"] = shopify_df["Cost_CAD"]
+    shopify_df["Status"] = "draft"
+    shopify_df["Tags"] = shopify_df["Tags"]
+    shopify_df["Option1 Name"] = "Title"
+    shopify_df["Option1 Value"] = "Default Title"
+    shopify_columns = [
+        "Handle", "Title", "Body (HTML)", "Variant SKU", "Variant Grams",
+        "Variant Price", "Cost per item", "Tags", "Status", "Option1 Name", "Option1 Value"
+    ]
+    csv = shopify_df[shopify_columns].to_csv(index=False, encoding='utf-8')
+    st.download_button("Download Shopify CSV", csv, "shopify_import.csv", "text/csv")
