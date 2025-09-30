@@ -126,15 +126,14 @@ if option == "Add Item":
                 "Weight_lb": round(weight_lb, 2),
                 "Description": description,
                 "Tier": tier,
-                "Size tributaries": [
-                    "Size", size,
-                    "Tags", f"tier{tier},{cleaned_tags}",
-                    "Measurements", measurements,
-                    "Pic_Paths", pic_paths,
-                    "Price_CAD", price_cad,
-                    "Cost_CAD", cost_cad,
-                    "Date_Added": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Sold": False
+                "Size": size,
+                "Tags": f"tier{tier},{cleaned_tags}",
+                "Measurements": measurements,
+                "Pic_Paths": pic_paths,
+                "Price_CAD": price_cad,
+                "Cost_CAD": cost_cad,
+                "Date_Added": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Sold": False
             }
             st.session_state.inventory = pd.concat([st.session_state.inventory, pd.DataFrame([new_item])], ignore_index=True)
             logger.debug("Item added to session state")
