@@ -150,23 +150,46 @@ elif option == "View Inventory":
     st.write(f"Total Cost: ${st.session_state.inventory['Cost_CAD'].sum():.2f} CAD")
 
 elif option == "Export Shopify CSV":
-    shopify_df = st.session_state.inventory.copy()
-    shopify_df["Handle"] = shopify_df["SKU"]
-    shopify_df["Title"] = shopify_df["Description"]
-    shopify_df["Body (HTML)"] = shopify_df.apply(
-        lambda row: f"<p>Tier {row['Tier']}. Size: {row['Size']}. Measurements: {row['Measurements']}.</p>", axis=1)
-    shopify_df["Variant SKU"] = shopify_df["SKU"]
-    shopify_df["Variant Grams"] = shopify_df["Weight_g"]
-    shopify_df["Variant Price"] = shopify_df["Price_CAD"]
-    shopify_df["Cost per item"] = shopify_df["Cost_CAD"]
-    shopify_df["Status"] = "draft"
-    shopify_df["Tags"] = shopify_df["Tags"]
-    shopify_df["Option1 Name"] = "Title"
-    shopify_df["Option1 Value"] = "Default Title"
-    # EDIT HERE: Modify shopify_columns to add/remove fields for Shopify CSV export
-    shopify_columns = [
-        "Handle", "Title", "Body (HTML)", "Variant SKU", "Variant Grams",
-        "Variant Price", "Cost per item", "Tags", "Status", "Option1 Name", "Option1 Value"
-    ]
-    csv = shopify_df[shopify_columns].to_csv(index=False, encoding='utf-8')
-    st.download_button("Download Shopify CSV", csv, "shopify_import.csv", "text/csv")
+    st.write("Select items to export to Shopify CSV:")
+    # Filter options
+    with st.form("export_filter_form"):
+        # EDIT HERE: Add more filter options (e.g., by Tier, Tags) if needed
+        export_all = st.checkbox("Export all items", value=True)
+        selected_skus = st.multiselect("Select SKUs (optional)", options=st.session_state.inventory["SKU"].tolist())
+        date_filter = st.date_input("Export items added on or after (optional)", value=None)
+        unsold_only = st.checkbox("Export only unsold items", value=False)
+        submitted = st.form_submit_button("Generate CSV")
+        
+        if submitted:
+            shopify_df = st.session_state.inventory.copy()
+            if not export_all:
+                # Apply filters
+                if selected_skus:
+                    shopify_df = shopify_df[shopify_df["SKU"].isin(selected_skus)]
+                if date_filter:
+                    shopify_df = shopify_df[pd.to_datetime(shopify_df["Date_Added"]).dt.date >= date_filter]
+                if unsold_only:
+                    shopify_df = shopify_df[shopify_df["Sold"] == False]
+            if shopify_df.empty:
+                st.error("No items match the selected filters.")
+            else:
+                shopify_df["Handle"] = shopify_df["SKU"]
+                shopify_df["Title"] = shopify_df["Description"]
+                shopify_df["Body (HTML)"] = shopify_df.apply(
+                    lambda row: f"<p>Tier {row['Tier']}. Size: {row['Size']}. Measurements: {row['Measurements']}.</p>", axis=1)
+                shopify_df["Variant SKU"] = shopify_df["SKU"]
+                shopify_df["Variant Grams"] = shopify_df["Weight_g"]
+                shopify_df["Variant Price"] = shopify_df["Price_CAD"]
+                shopify_df["Cost per item"] = shopify_df["Cost_CAD"]
+                shopify_df["Status"] = "draft"
+                shopify_df["Tags"] = shopify_df["Tags"]
+                shopify_df["Option1 Name"] = "Title"
+                shopify_df["Option1 Value"] = "Default Title"
+                # EDIT HERE: Modify shopify_columns to add/remove fields for Shopify CSV export
+                shopify_columns = [
+                    "Handle", "Title", "Body (HTML)", "Variant SKU", "Variant Grams",
+                    "Variant Price", "Cost per item", "Tags", "Status", "Option1 Name", "Option1 Value"
+                ]
+                csv = shopify_df[shopify_columns].to_csv(index=False, encoding='utf-8')
+                st.download_button("Download Shopify CSV", csv, "shopify_import.csv", "text/csv")
+                st.write(f"Exported {len(shopify_df)} items to CSV.")
