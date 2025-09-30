@@ -4,18 +4,35 @@ from github import Github
 import datetime
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging to file and console
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # GitHub configuration
+# EDIT HERE: Update REPO_NAME if your GitHub repo changes (format: "username/repo")
 REPO_NAME = "pxlhierarchy/lbstyle"
+# EDIT HERE: GITHUB_TOKEN is stored in .streamlit/secrets.toml; update there, not here
 GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 
-# Pricing (CAD)
-PRICE_PER_LB = {"1": 7.50, "2": 5.50, "3": 4.00, "Bundle": 3.75}
-COST_PER_LB = 1.79  # Goodwill bins cost
-G_PER_LB = 453.592
+# Pricing configuration (all in CAD)
+# EDIT HERE: Adjust PRICE_PER_LB for each tier (e.g., {"1": 8.00} for Tier 1 at $8.00/lb)
+PRICE_PER_LB = {
+    "1": 7.50,  # Tier 1 price per pound
+    "2": 5.50,  # Tier 2 price per pound
+    "3": 4.00,  # Tier 3 price per pound
+    "Bundle": 3.75  # Bundle price per pound
+}
+# EDIT HERE: Update COST_PER_LB for Goodwill bins cost (e.g., 2.00 for $2.00/lb)
+COST_PER_LB = 1.79  # Goodwill bins cost per pound
+# EDIT HERE: Update G_PER_LB if grams-to-pounds conversion changes
+G_PER_LB = 453.592  # Grams per pound for weight conversion
 
 # Initialize session state
 if "inventory" not in st.session_state:
@@ -35,34 +52,44 @@ if "inventory" not in st.session_state:
             "Measurements", "Pic_Paths", "Price_CAD", "Cost_CAD", "Date_Added", "Sold"
         ])
 
-# Function to save to GitHub
+# Function to save to GitHub and local
 def save_to_github(df):
     try:
         logger.debug(f"Connecting to GitHub with token ending: {GITHUB_TOKEN[-4:]}")
         g = Github(GITHUB_TOKEN)
         logger.debug(f"Accessing repo: {REPO_NAME}")
         repo = g.get_repo(REPO_NAME)
-        logger.debug("Verifying branch: main")
-        repo.get_branch("main")  # Confirm branch exists
+        # EDIT HERE: Change branch to "master" if your repo uses master instead of main
+        branch = "main"
+        logger.debug(f"Verifying branch: {branch}")
+        repo.get_branch(branch)
         logger.debug("Checking for existing inventory.csv")
+        file_path = "inventory.csv"
         try:
-            contents = repo.get_contents("inventory.csv", ref="main")
+            contents = repo.get_contents(file_path, ref=branch)
             sha = contents.sha
-            logger.debug(f"Found inventory.csv, SHA: {sha}")
+            logger.debug(f"Found {file_path}, SHA: {sha}")
         except Exception as e:
-            logger.debug(f"No inventory.csv or error: {e}")
+            logger.debug(f"No {file_path} or error: {e}")
             sha = None
         csv_content = df.to_csv(index=False, encoding='utf-8')
         logger.debug(f"Prepared CSV content, length: {len(csv_content)} bytes")
         commit_message = f"Update inventory.csv {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         logger.debug(f"Committing: {commit_message}")
         if sha:
-            repo.update_file("inventory.csv", commit_message, csv_content, sha, branch="main")
-            logger.debug("Updated existing inventory.csv")
+            repo.update_file(file_path, commit_message, csv_content, sha, branch=branch)
+            logger.debug(f"Updated {file_path}")
         else:
-            repo.create_file("inventory.csv", commit_message, csv_content, branch="main")
-            logger.debug("Created new inventory.csv")
-        logger.info("Successfully saved to inventory.csv on GitHub")
+            repo.create_file(file_path, commit_message, csv_content, branch=branch)
+            logger.debug(f"Created {file_path}")
+        # Save to local inventory.csv
+        try:
+            df.to_csv("inventory.csv", index=False, encoding='utf-8')
+            logger.debug("Saved to local inventory.csv")
+        except Exception as e:
+            logger.error(f"Failed to save local inventory.csv: {e}")
+            st.error(f"Failed to save local inventory.csv: {e}")
+        logger.info("Successfully saved to inventory.csv on GitHub and local")
         return True
     except Exception as e:
         logger.error(f"GitHub commit failed: {str(e)}")
@@ -71,6 +98,7 @@ def save_to_github(df):
 
 # Streamlit UI
 st.title("BinRipper.fit Inventory Manager")
+# EDIT HERE: Add or modify actions in the sidebar (e.g., ["Add Item", "View Inventory", "New Action"])
 option = st.sidebar.selectbox("Select Action", ["Add Item", "View Inventory", "Export Shopify CSV"])
 
 if option == "Add Item":
@@ -78,8 +106,9 @@ if option == "Add Item":
         sku = st.text_input("SKU")
         weight_g = st.number_input("Weight (grams)", min_value=0.0, step=0.1)
         description = st.text_input("Description")
+        # EDIT HERE: Modify tier options if needed (e.g., add "4" for a new tier)
         tier = st.selectbox("Tier", ["1", "2", "3", "Bundle"])
-        size = st.selectbox("Size", ["XS", "S", "M", "L", "XL"])
+        size = st.text_input("Size (e.g., XS, 23x24)")
         tags = st.text_input("Tags (comma-separated)")
         measurements = st.text_input("Measurements")
         pic_paths = st.text_input("Picture Paths (comma-separated)")
@@ -109,7 +138,7 @@ if option == "Add Item":
             st.session_state.inventory = pd.concat([st.session_state.inventory, pd.DataFrame([new_item])], ignore_index=True)
             logger.debug("Item added to session state")
             if save_to_github(st.session_state.inventory):
-                st.success("Item added and saved to GitHub!")
+                st.success("Item added and saved to GitHub and local!")
                 st.write(f"SKU={sku}, Weight={weight_g}g ({round(weight_lb, 2)}lb), Tier={tier}, Price=${price_cad} CAD, Cost=${cost_cad} CAD")
             else:
                 st.error("Item added locally but failed to save to GitHub.")
@@ -125,7 +154,7 @@ elif option == "Export Shopify CSV":
     shopify_df["Handle"] = shopify_df["SKU"]
     shopify_df["Title"] = shopify_df["Description"]
     shopify_df["Body (HTML)"] = shopify_df.apply(
-        lambda row: f"<p>Tier {row['Tier']}. Size: {row['Size']}. Measurements: {row['Measurements']}. All sales final.</p>", axis=1)
+        lambda row: f"<p>Tier {row['Tier']}. Size: {row['Size']}. Measurements: {row['Measurements']}.</p>", axis=1)
     shopify_df["Variant SKU"] = shopify_df["SKU"]
     shopify_df["Variant Grams"] = shopify_df["Weight_g"]
     shopify_df["Variant Price"] = shopify_df["Price_CAD"]
@@ -134,6 +163,7 @@ elif option == "Export Shopify CSV":
     shopify_df["Tags"] = shopify_df["Tags"]
     shopify_df["Option1 Name"] = "Title"
     shopify_df["Option1 Value"] = "Default Title"
+    # EDIT HERE: Modify shopify_columns to add/remove fields for Shopify CSV export
     shopify_columns = [
         "Handle", "Title", "Body (HTML)", "Variant SKU", "Variant Grams",
         "Variant Price", "Cost per item", "Tags", "Status", "Option1 Name", "Option1 Value"
