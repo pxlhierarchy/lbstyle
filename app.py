@@ -160,17 +160,21 @@ elif option == "Export Shopify CSV":
     # Filter options
     with st.form("export_filter_form"):
         # EDIT HERE: Add more filter options (e.g., by Tier, Tags) if needed
-        export_all = st.checkbox("Export all items", value=True)
+        export_all = st.checkbox("Export all items", value=False)  # Default to False for selective export
         selected_skus = st.multiselect("Select SKUs (optional)", options=st.session_state.inventory["SKU"].tolist())
         date_filter = st.date_input("Export items added on or after (optional)", value=None)
         unsold_only = st.checkbox("Export only unsold items", value=False)
         submitted = st.form_submit_button("Generate CSV")
     
     if submitted:
+        # Reset session state to avoid stale data
+        st.session_state.export_csv = None
+        st.session_state.export_count = 0
         shopify_df = st.session_state.inventory.copy()
         logger.debug(f"Applying filters: export_all={export_all}, selected_skus={selected_skus}, date_filter={date_filter}, unsold_only={unsold_only}")
-        if not export_all:
-            # Apply filters
+        
+        if not export_all and (selected_skus or date_filter or unsold_only):
+            # Apply filters only if at least one filter is active
             if selected_skus:
                 shopify_df = shopify_df[shopify_df["SKU"].isin(selected_skus)]
                 logger.debug(f"Filtered by SKUs: {shopify_df['SKU'].tolist()}")
@@ -180,8 +184,14 @@ elif option == "Export Shopify CSV":
             if unsold_only:
                 shopify_df = shopify_df[shopify_df["Sold"] == False]
                 logger.debug(f"Filtered by unsold: {shopify_df['SKU'].tolist()}")
+        elif export_all:
+            logger.debug("Exporting all items")
+        else:
+            shopify_df = pd.DataFrame()  # Empty dataframe if no filters and not exporting all
+            logger.debug("No filters applied and export_all=False, returning empty dataframe")
+        
         if shopify_df.empty:
-            st.error("No items match the selected filters.")
+            st.error("No items match the selected filters or no filters were applied.")
             st.session_state.export_csv = None
             st.session_state.export_count = 0
         else:
@@ -204,7 +214,7 @@ elif option == "Export Shopify CSV":
             ]
             st.session_state.export_csv = shopify_df[shopify_columns].to_csv(index=False, encoding='utf-8')
             st.session_state.export_count = len(shopify_df)
-            logger.debug(f"Generated CSV for {st.session_state.export_count} items")
+            logger.debug(f"Generated CSV for {st.session_state.export_count} items: {shopify_df['SKU'].tolist()}")
             st.success(f"Prepared {st.session_state.export_count} items for export.")
 
     # Display download button only if CSV content is available
