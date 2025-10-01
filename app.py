@@ -192,12 +192,7 @@ elif option == "Export Shopify CSV":
             shopify_df = pd.DataFrame(columns=st.session_state.inventory.columns)  # Empty dataframe with same columns
             logger.debug("No filters applied and export_all=False, returning empty dataframe")
         
-        if shopify_df.empty:
-            st.error("No items match the selected filters or no filters were applied. Please select items or check 'Export all items'.")
-            st.session_state.export_csv = None
-            st.session_state.export_count = 0
-            logger.debug("No items to export, skipping CSV generation")
-        else:
+        if not shopify_df.empty:
             # Map inventory fields to Shopify CSV fields based on template
             shopify_df["Handle"] = shopify_df["SKU"]
             shopify_df["Title"] = shopify_df["Description"]
@@ -238,6 +233,11 @@ elif option == "Export Shopify CSV":
             st.session_state.export_count = len(shopify_df)
             st.success(f"Prepared {st.session_state.export_count} items for export.")
             logger.debug(f"Generated CSV for {st.session_state.export_count} items: {shopify_df['SKU'].tolist()}")
+        else:
+            st.error("No items match the selected filters or no filters were applied. Please select items or check 'Export all items'.")
+            st.session_state.export_csv = None
+            st.session_state.export_count = 0
+            logger.debug("No items to export, skipping CSV generation")
 
     # Display download button only if CSV content is available
     if st.session_state.export_csv:
