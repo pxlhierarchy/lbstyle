@@ -179,20 +179,20 @@ elif option == "Export Shopify CSV":
             # Apply filters only if at least one filter is active
             if selected_skus:
                 shopify_df = shopify_df[shopify_df["SKU"].isin(selected_skus)]
-                logger.debug(f"Filtered by SKUs: {shopify_df['SKU'].tolist()}")
+                logger.debug(f"Filtered by SKUs: {shopify_df['SKU'].tolist() if 'SKU' in shopify_df.columns else 'No SKUs'}")
             if date_filter:
                 shopify_df = shopify_df[pd.to_datetime(shopify_df["Date_Added"]).dt.date >= date_filter]
-                logger.debug(f"Filtered by date: {shopify_df['SKU'].tolist()}")
+                logger.debug(f"Filtered by date: {shopify_df['SKU'].tolist() if 'SKU' in shopify_df.columns else 'No SKUs'}")
             if unsold_only:
                 shopify_df = shopify_df[shopify_df["Sold"] == False]
-                logger.debug(f"Filtered by unsold: {shopify_df['SKU'].tolist()}")
+                logger.debug(f"Filtered by unsold: {shopify_df['SKU'].tolist() if 'SKU' in shopify_df.columns else 'No SKUs'}")
         elif export_all:
             logger.debug("Exporting all items")
         else:
-            shopify_df = pd.DataFrame()  # Empty dataframe if no filters and not exporting all
+            shopify_df = pd.DataFrame(columns=st.session_state.inventory.columns)  # Empty dataframe with same columns
             logger.debug("No filters applied and export_all=False, returning empty dataframe")
         
-        if shopify_df.empty:
+        if shopify_df.empty or 'SKU' not in shopify_df.columns:
             st.error("No items match the selected filters or no filters were applied.")
             st.session_state.export_csv = None
             st.session_state.export_count = 0
