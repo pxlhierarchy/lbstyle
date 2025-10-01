@@ -37,8 +37,10 @@ G_PER_LB = 453.592  # Grams per pound for weight conversion
 # Initialize session state
 if "inventory" not in st.session_state:
     try:
+        # EDIT HERE: Set max_rows to limit inventory size (e.g., 1000 for last 1000 items)
+        max_rows = 1000
         logger.debug("Loading inventory.csv...")
-        df = pd.read_csv("inventory.csv") if pd.io.common.file_exists("inventory.csv") else pd.DataFrame(columns=[
+        df = pd.read_csv("inventory.csv", nrows=max_rows) if pd.io.common.file_exists("inventory.csv") else pd.DataFrame(columns=[
             "SKU", "Weight_g", "Weight_lb", "Description", "Tier", "Size", "Tags",
             "Measurements", "Pic_Paths", "Price_CAD", "Cost_CAD", "Date_Added", "Sold"
         ])
@@ -177,44 +179,57 @@ elif option == "Export Shopify CSV":
             # Apply filters only if at least one filter is active
             if selected_skus:
                 shopify_df = shopify_df[shopify_df["SKU"].isin(selected_skus)]
-                logger.debug(f"Filtered by SKUs: {shopify_df['SKU'].tolist()}")
             if date_filter:
                 shopify_df = shopify_df[pd.to_datetime(shopify_df["Date_Added"]).dt.date >= date_filter]
-                logger.debug(f"Filtered by date: {shopify_df['SKU'].tolist()}")
             if unsold_only:
                 shopify_df = shopify_df[shopify_df["Sold"] == False]
-                logger.debug(f"Filtered by unsold: {shopify_df['SKU'].tolist()}")
-        elif export_all:
-            logger.debug("Exporting all items")
-        else:
-            shopify_df = pd.DataFrame()  # Empty dataframe if no filters and not exporting all
-            logger.debug("No filters applied and export_all=False, returning empty dataframe")
+        elif not export_all:
+            shopify_df = pd.DataFrame(columns=st.session_state.inventory.columns)  # Empty dataframe with same columns
         
         if shopify_df.empty:
-            st.error("No items match the selected filters or no filters were applied.")
+            st.error("No items match the selected filters or no filters were applied. Please select items or check 'Export all items'.")
             st.session_state.export_csv = None
             st.session_state.export_count = 0
+            logger.debug("No items to export, skipping CSV generation")
         else:
+            # Map inventory fields to Shopify CSV fields based on template
             shopify_df["Handle"] = shopify_df["SKU"]
             shopify_df["Title"] = shopify_df["Description"]
             shopify_df["Body (HTML)"] = shopify_df.apply(
-                lambda row: f"<p>Tier {row['Tier']}. Size: {row['Size']}. Measurements: {row['Measurements']}.</p>", axis=1)
-            shopify_df["Variant SKU"] = shopify_df["SKU"]
-            shopify_df["Variant Grams"] = shopify_df["Weight_g"]
-            shopify_df["Variant Price"] = shopify_df["Price_CAD"]
-            shopify_df["Cost per item"] = shopify_df["Cost_CAD"]
-            shopify_df["Status"] = "draft"
+                lambda row: f"<p>Tier {row['Tier']}. Size: {row['Size']}. Measurements: {row['Measurements']}. Weight: {row['Weight_g']}g.</p>", axis=1)
+            shopify_df["Vendor"] = "BinRipper.fit"
+            shopify_df["Product Category"] = "Apparel & Accessories > Clothing"
+            shopify_df["Type"] = shopify_df["Tags"].apply(lambda x: x.split(",")[0].replace("tier", "Tier ") if isinstance(x, str) else "")
             shopify_df["Tags"] = shopify_df["Tags"]
+            shopify_df["Published"] = True
             shopify_df["Option1 Name"] = "Title"
             shopify_df["Option1 Value"] = "Default Title"
+            shopify_df["Variant SKU"] = shopify_df["SKU"]
+            shopify_df["Variant Grams"] = shopify_df["Weight_g"]
+            shopify_df["Variant Inventory Tracker"] = "shopify"
+            shopify_df["Variant Inventory Qty"] = 1
+            shopify_df["Variant Inventory Policy"] = "deny"
+            shopify_df["Variant Fulfillment Service"] = "manual"
+            shopify_df["Variant Price"] = shopify_df["Price_CAD"]
+            shopify_df["Variant Requires Shipping"] = True
+            shopify_df["Variant Taxable"] = True
+            shopify_df["Image Src"] = shopify_df["Pic_Paths"]
+            shopify_df["Image Position"] = 1
+            shopify_df["Image Alt Text"] = shopify_df["Description"]
+            shopify_df["Cost per item"] = shopify_df["Cost_CAD"]
+            shopify_df["Status"] = "active"
             # EDIT HERE: Modify shopify_columns to add/remove fields for Shopify CSV export
             shopify_columns = [
-                "Handle", "Title", "Body (HTML)", "Variant SKU", "Variant Grams",
-                "Variant Price", "Cost per item", "Tags", "Status", "Option1 Name", "Option1 Value"
+                "Handle", "Title", "Body (HTML)", "Vendor", "Product Category", "Type", "Tags", "Published",
+                "Option1 Name", "Option1 Value", "Variant SKU", "Variant Grams", "Variant Inventory Tracker",
+                "Variant Inventory Qty", "Variant Inventory Policy", "Variant Fulfillment Service", "Variant Price",
+                "Variant Requires Shipping", "Variant Taxable", "Image Src", "Image Position", "Image Alt Text",
+                "Cost per item", "Status"
             ]
-            st.session_state.export_csv = shopify_df[shopify_columns].to_csv(index=False, encoding='utf-8')
+            # Replace NaN with empty string for optional fields to avoid "nan" in CSV
+            shopify_df = shopify_df[shopify_columns].fillna("")
+            st.session_state.export_csv = shopify_df.to_csv(index=False, encoding='utf-8')
             st.session_state.export_count = len(shopify_df)
-            logger.debug(f"Generated CSV for {st.session_state.export_count} items: {shopify_df['SKU'].tolist()}")
             st.success(f"Prepared {st.session_state.export_count} items for export.")
 
     # Display download button only if CSV content is available
